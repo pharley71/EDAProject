@@ -1,0 +1,778 @@
+---
+title: "Election_Analysis_SC"
+author: "Patrick Harley"
+date: "August 1, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+library(ggplot2)
+library(plyr)
+library(lubridate)
+options(scipen = 999)
+
+ELECTION_FILE <- "P00000001-SC.csv"
+ZIP_COUNTY_FILE <- "zip_county.csv"
+COUNTY_DATA_FILE <- "counties.csv"
+
+CANDIDATES = c("Sanders, Bernard", "Trump, Donald J.", "Clinton, Hillary Rodham",
+ "O'Malley, Martin Joseph", "McMullin, Evan", "Cruz, Rafael Edward 'Ted'",
+ "Walker, Scott", "Bush, Jeb", "Rubio, Marco", "Christie, Christopher J.",
+ "Johnson, Gary", "Paul, Rand", "Kasich, John R.", "Webb, James Henry Jr.",
+ "Fiorina, Carly", "Jindal, Bobby", "Santorum, Richard J.", "Huckabee, Mike",           
+ "Carson, Benjamin S.", "Stein, Jill", "Lessig, Lawrence", "Graham, Lindsey O.",
+ "Perry, James R. (Rick)") 
+PARTIES = c("Democrat", "Republican", "Democrat", 
+ "Democrat", "Independent", "Republican", 
+ "Republican", "Republican", "Republican", "Republican",
+ "Libertarian", "Republican", "Republican", "Democrat", 
+ "Republican", "Republican", "Republican", "Republican",
+ "Republican", "Green", "Democrat", "Republican", 
+ "Republican")
+CAND_PARTY = data.frame(CANDIDATES, PARTIES)
+
+#getPartiesByCandidate
+#This functions taks a vector of candidates, 
+#matches them to a pre-defined vector to sort by party
+#it returns a matched column of parties
+getPartiesByCandidate <- function(candidate_col) {
+  parties <- CAND_PARTY$PARTIES[match(candidate_col, CAND_PARTY$CANDIDATES)]
+  return(parties)
+}
+
+#uniformZip
+#convert zip codes to string, and 5 characters
+uniformZip <- function(zip_col) {
+  zip_col <- as.character(zip_col)
+  zip_col <- substr(zip_col, 1, 5)
+  return(zip_col)
+}
+
+#getCountiesByZips
+#this takes a column of zip codes, returns 
+#the corresponding counties as a vector 
+#utilizing an external file
+getCountiesByZips <- function(filename, zip_col) {
+  file_data <- read.csv(filename)
+  file_data$zip <- uniformZip(file_data$zip)
+  counties <- file_data$county[match(zip_col, file_data$zip)]
+  return(counties)
+}
+
+#loadAndPreProcess
+#Load the main file and process some fields
+#note that the cleaned zip code becomes 'zip', 
+#and negative contributions are discarded
+loadAndPreProcess <- function(filename) {
+   main_data <- read.csv(filename, as.is = TRUE)  
+   main_data$zip <- uniformZip(main_data$contbr_zip)
+   main_data$date <- as.Date(main_data$contb_receipt_dt, "%m/%d/%Y")
+   main_data <- subset(main_data, main_data$contb_receipt_amt > 0)
+   return(main_data)
+}
+
+#addCountyData takes an external filename, a dataframe
+#and returns the dataframe with demographic data attached
+addCountyData <- function(cd_filename, df) {
+  c_data <- read.csv(cd_filename)
+  c_data$median <- as.numeric(gsub('[$,]', '', c_data$median))
+  c_data$per_capita <- as.numeric(gsub('[$,]', '', c_data$per_capita))
+  c_data$population <- as.numeric(gsub('[,]', '', c_data$population))
+  c_data <- merge(x = df, y = c_data, by = "county", all.x = TRUE)
+  return(c_data)
+}
+
+contr_data <- loadAndPreProcess(ELECTION_FILE)
+contr_data$county <- getCountiesByZips(ZIP_COUNTY_FILE, contr_data$zip)
+contr_data$party <- getPartiesByCandidate(contr_data$cand_nm)
+```
+
+This report examines a dataset concerning 2016 presidential campaign contributions, and corresponding voter information. The state examined is South Carolina. Other geographical, demographic, and polling data were also introduced from separate files. 
+
+# Univariate Plots Section
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+str(contr_data)
+```
+
+The data was pre-processed to:
+(a) Extract negative/zero contributions, as these are usually ones that are returned. 
+(b) Normalize zip codes to 5 digits. 
+(c) Add a geographical variable (county of contributor) and a variable for candidate (political) party. 
+
+
+There are 64,920 observations, and 22 variables, though not all are conducive to meaningful analysis. In fact, the only significant numerical variable in the data as originally loaded is the contribution amount. Summary statistics: 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+summary(contr_data$contb_receipt_amt)
+```
+
+Note the wide discrepancy between mean and median, and that the mean is in the 4th quartile. This will require exploration and explanation. 
+
+***
+
+Variables of interest: 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#plot number of contributions per candidate
+ggplot(aes(x = cand_nm), data = contr_data) +
+  geom_histogram(stat = "count", label = abbreviate) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  labs(title = "Number of Contributions Per Candidate", x = "Candidate", y = "# Of Contributions")
+
+```
+
+Clinton led the way in total number of contributions.
+
+Contributor cities number 576. Perhaps it's best to look at the top populous areas in the state. https://en.wikipedia.org/wiki/List_of_cities_and_towns_in_South_Carolina
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#construct a data frame for larger cities, explore for significance
+big_cities = c("COLUMBIA", "CHARLESTON", "NORTH CHARLESTON", "MOUNT PLEASANT", 
+                "ROCK HILL", "GREENVILLE", "SUMMERVILLE", "SUMTER", "GOOSE CREEK", "HILTON HEAD ISLAND", 
+                "FLORENCE", "SPARTANBURG","MYRTLE BEACH", "AIKEN")
+big_city_df = subset(contr_data, is.element(contr_data$contbr_city, big_cities))
+#percentage of total contributions: 
+nrow(big_city_df)/nrow(contr_data)
+
+city_count <- count(big_city_df, 'contbr_city')
+city_count$proportion = city_count$freq/sum(city_count$freq)
+arrange(city_count, desc(freq))
+
+ggplot(aes(x = contbr_city), 
+  data = big_city_df) + 
+  geom_histogram(stat = "count") +
+  labs(title = "Contributions Per City (Large)", x = "City", y = "# Of Contributions") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+
+Further exploration of the statistics per city did not provide much value. For this reason, a county variable was added to the main dataframe. 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#graph the contributions by county 
+county_count <- count(contr_data, c("county"))
+
+ggplot(aes(x = county), data = subset(contr_data, !is.na(county))) +
+  geom_histogram(stat = "count") + 
+  labs(title = "Contributions Per County", x = "County", y = "# Of Contributions") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+#output summary statistics: 
+summary(county_count$freq)
+county_count$proportion = county_count$freq/sum(county_count$freq)
+arrange(county_count, desc(freq))
+  
+```
+
+Unsurprisingly, the most populous counties had the most contributions. Cumulative amounts raised will be studied more later in the bivariate and multivariate analysis. 
+
+***
+
+A first look at contributions in ranges.  
+
+Note: federal law caps individual donations at $2700. In all, 9,227,824 in positive contributions were donated. The distribution is right-tailed, with smaller contributions dominant. 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#graph contributions with x = amount
+contr_hist_1 <-ggplot(aes(x = contb_receipt_amt), data = contr_data) + 
+                      geom_histogram(bins = 100) +
+                      scale_x_continuous(limits = c(0, 2700), breaks = seq(0, 2700, 100)) +
+                      scale_y_continuous(limits = c(0, 10000)) +
+                      labs(title = "Contributions I", x = "Contributions Amount")  +
+                      theme(axis.text.x = element_text(angle = 60, hjust = 1))
+contr_hist_1
+```
+
+Now, Contributions of $250 or more: 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#graph contributions by amount, with x > 250
+  ggplot(aes(x = contb_receipt_amt), data = contr_data) + 
+    geom_histogram(bins = 100) +
+    scale_x_continuous(limits = c(250, 2800), breaks = seq(0, 2700, 100)) +
+    scale_y_continuous(limits = c(0, 1500)) +
+    labs(title = "Contributions II", x = "Contributions Amount")  +
+    theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+```
+
+The heavier weights on this last graph gives a better sense of the following reality. The sum of all contributions less than  $250: 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#sum of contributions less than $250
+sum(subset(contr_data$contb_receipt_amt, contr_data$contb_receipt_amt < 250))
+
+```
+
+Greater than or equal to $250: 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#sum of contributions greater than $250
+sum(subset(contr_data$contb_receipt_amt, contr_data$contb_receipt_amt >= 250))
+```
+
+***
+A variable was also added for party of the contribution recipient. 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#frequency tables for contributions by party
+p <- count(contr_data, c("party"))
+p$proportion = p$freq/sum(p$freq)
+arrange(p, desc(freq))
+```
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#graph contributions amounts per party
+ggplot(aes(x = party), data = contr_data) + 
+  geom_histogram(stat = "count") +
+  labs(title = "Contributions By Party", x = "Party") +
+  scale_x_discrete(limits = c("Democrat", "Republican", "Libertarian", "Green", "Independent"))
+```
+
+The total number of contributions favored the democrats. But as will be seen, the total amount raised was a different story. 
+
+***
+There was also a rough consolidation taken across the occupation column, organized by industry 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#by-hand construction of Industry variable
+#this filters on keywords from job descriptions 
+#by using Grep 
+e <- count(contr_data, c("contbr_occupation")) 
+
+contr_data[grep("RETIRED", contr_data$contbr_occupation), "Industry"] <- "Retired"
+contr_data[grep("NOT EMPLOYED|UNEMPLOYED", contr_data$contbr_occupation), "Industry"] <- "Unenmployed"
+contr_data[grep("REQUESTED|NONE|PARTNER", contr_data$contbr_occupation), "Industry"] <- "Unknown"
+contr_data[grep("ATTORNEY|LAWYER|PARALEGAL|LITIGATION", 
+                       contr_data$contbr_occupation), "Industry"] <- "Law"
+contr_data[grep("HOMEMAKER|HOUSEWIFE", contr_data$contbr_occupation), "Industry"] <- "Homemaker"
+contr_data[grep("TEACHER|PROFESSOR|LIBRARIAN|ASSOC PROF|INSTRUCTOR|SCHOOL BOARD|EDUCATOR|INSTRUCTIOR", 
+                       contr_data$contbr_occupation), "Industry"] <- "Education"
+contr_data[grep("PHYSICIAN|NURSE|RN|PSYCHOLOGIST|DENTIST|PHARMAC|MASSAGE|R.N.|PEDIATRICIAN|PATHOLOGIST|THERAPIST", 
+                       contr_data$contbr_occupation), "Industry"] <- "Medical"
+contr_data[grep("VETERINARIAN|HEALTHCARE|PSYCHOTHERAPIST|MEDICAL", 
+                       contr_data$contbr_occupation), "Industry"] <- "Medical"
+contr_data[grep("ENGINEER|SOFTWARE|PROGRAMMER|DRAFTSMAN|SCIENTIST|RESEARCHER|IT SOLUTION|ENGINEERING|IT SPECIALIST", 
+                       contr_data$contbr_occupation), "Industry"] <- "Engineer-IT-Science"
+contr_data[grep("CHEMIST|DEVELOPER", contr_data$contbr_occupation), "Industry"] <- "Engineer-IT-Science"
+contr_data[grep("SALES", contr_data$contbr_occupation), "Industry"] <- "Sales"
+
+contr_data[grep("CONSULTANT|CONTRACTOR|CONSTRUCTION|AGENT|BUSINESS DEVELOPMENT|ANALYST|DEBT|MEETING PLANNER", 
+                       contr_data$contbr_occupation), "Industry"] <- "Consultant-Contractor"
+contr_data[grep("COORDINATOR|BUILDER|CONSULTING", 
+                       contr_data$contbr_occupation), "Industry"] <- "Consultant-Contractor"
+contr_data[grep("OWNER", contr_data$contbr_occupation), "Industry"] <- "Business Owner"
+contr_data[grep("PRESIDENT|CEO|ADMINISTRATOR|DIRECTOR|PERSONNEL|CFO|MANAGEMENT|SUPERVISOR", 
+                       contr_data$contbr_occupation), "Industry"] <- "Management-Executive"
+contr_data[grep("STUDENT|GRADUATE", contr_data$contbr_occupation), "Industry"] <- "Student"
+contr_data[grep("RECEPTIONIST", contr_data$contbr_occupation), "Industry"] <- "Office"
+contr_data[grep("WRITER|ARTIST|MUSICIAN|EDITOR|AUTHOR|GRAPHIC DESIGNER|INTERIOR DESIGN|
+                       PUBLISHER|PHOTOGRAPHER|VIDEO", 
+                       contr_data$contbr_occupation), "Industry"] <- "Creative"
+contr_data[grep("SELF|ENTREPRENEUR", contr_data$contbr_occupation), "Industry"] <- "Self-Employed"
+contr_data[grep("REALTOR|REAL ESTATE", contr_data$contbr_occupation), "Industry"] <- "Real Estate"
+contr_data[grep("COUNSELOR|ADVISOR", contr_data$contbr_occupation), "Industry"] <- "Counselor"
+contr_data[grep("MARKETING", contr_data$contbr_occupation), "Industry"] <- "Marketing"
+contr_data[grep("MINISTER|PASTOR|MINISTRY", contr_data$contbr_occupation), "Industry"] <- "Religion"
+contr_data[grep("SOCIAL WORKER", contr_data$contbr_occupation), "Industry"] <- "Social Work"
+contr_data[grep("INSURANCE|UNDERWRITER", contr_data$contbr_occupation), "Industry"] <- "Insurance"
+contr_data[grep("PILOT|DRIVER", contr_data$contbr_occupation), "Industry"] <- "Travel-Transport"
+contr_data[grep("SERVER|CUSTOMER|SALES ASSOCIATE|BAKER|RETAIL|BARTENDER|CASHIER|COURIER", 
+                       contr_data$contbr_occupation), "Industry"] <- "Service"
+contr_data[grep("BANKER|ACCOUNTANT|CPA|FINANCE|BOOKKEEPER", 
+                       contr_data$contbr_occupation), "Industry"] <- "Finance"
+contr_data[grep("FARMER", contr_data$contbr_occupation), "Industry"] <- "Farmer"
+contr_data[grep("TECHNICIAN|EQUIPMENT TECH|MECHANIC", 
+                       contr_data$contbr_occupation), "Industry"] <- "Technician"
+contr_data[grep("HEARING OFFICER|POSTAL", contr_data$contbr_occupation), "Industry"] <- "Government"
+
+i <- count(subset(contr_data, !is.na(Industry) & Industry != "Unknown"
+                  & Industry != "Retired" & Industry != "Unemployed"), c("Industry")) 
+arrange(i, desc(freq))
+
+```
+
+The date of each contribution was also provided. A timeline: 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#graph of number of contributions by date,
+#broken into 2-month intervals
+ggplot(aes(x = ymd(date)), 
+  data = contr_data) + 
+  geom_histogram(stat = "count") +
+  labs(title = "Contributions Timeline", x = "Dates", y = "# Of Contributions") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  scale_x_date(date_breaks = "2 months", date_labels = "%b %y")
+```
+
+By Month: 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#install.packages("zoo")
+#Graph the contributions per month, 
+#using zoo package method yearmon()
+library(zoo)
+ggplot(aes(x = as.Date(as.yearmon(date))), 
+  data = contr_data) + 
+  geom_histogram(stat = "count") +
+  labs(title = "Contributions Timeline", x = "Months", y = "# Of Contributions") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %y")
+```
+
+# Univariate Analysis
+
+After removing returned (negative) contributions, there are 64,920 contributions in the principal dataset. 
+
+Observations: 
+* The median contribution is $38, the mean $142.
+* The weighted sums favored larger contributions.
+* 55.7% of total contributions came from 5 counties (out of 44). 
+* The Democrats had the highest number of contributions, 3rd parties were not a significant factor.
+* The number of contributions were high in the runup to the primary Jan/Feb '16, in the convention month of July '16, and Oct '16 the month before the election. 
+
+In this phase, the main features in the dataset are contribution amounts, party and geographical clustering (of contributions). Some attention will also be paid to contributor occupations, gathered into industry. I'd like to find out what factors predict total contributions in different areas of the state. Good predictors will likely be population and income (which will be introduced). 
+
+The timeline is also crucial for exploring the data, as there are different phases: primary (with sub-phases as different candidates rise and fall, and the field thins) and general election. It should be especially interesting to see the progression of Trump contributions, as the perception of his candidacy became more viable. 
+
+I created "clean" variables for zip code and contribution dates. The normalized zip codes were used with an external file to add a county variable. A party variable was added as well. 
+
+In the analysis of contribution amounts, different "looks" (limits, binwidths) at amount ranges were used to extract meaningful analysis of the right-tailed distribution. I also refined the contributions timeline to month after the original by-date graph. 
+
+***
+
+# Bivariate Plots  
+
+First we'll look at the relationship between candidates and the variable receipt totals, and corresponding statistics.  Given the nominal sums donated to the 3rd party and independent candidates, I wanted to focus on the Republican-Democrat matchup. 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#regroup the main dataframe (contr_data) 
+#by candidate name, then summarise on their
+#total contribution amount, print summary
+library(dplyr)
+name_groups <- group_by(subset(contr_data, party == "Democrat" | party == "Republican"), 
+                        cand_nm)
+contrByCandidates <- summarise(name_groups,
+                               total = sum(contb_receipt_amt),
+                               n = n()
+                               )
+arrange(contrByCandidates, desc(total))
+summary(contrByCandidates$total)
+```
+
+It makes sense to look at the candidate totals by party, and before the primary, when so many were eliminated. 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#group the main data frame (contr_data) by party and candidate,
+#summarise on total contribution amounts  
+party_groups <- group_by(subset(contr_data, party == "Democrat" | party == "Republican"), 
+                        party, cand_nm)
+contrByParty <- summarise(party_groups,
+                          total = sum(contb_receipt_amt),
+                          n = n()
+                         )
+```
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#group the main data frame (contr_data) by party and date, 
+#plot with x= party, y = contribution amount total
+primary_groups <- group_by(subset(contr_data, (party == "Democrat" | party == "Republican")
+                                               & date < "0016-2-21"),
+                          party, cand_nm)
+contrPrePrimary <- summarise(primary_groups,
+                          total = sum(contb_receipt_amt),
+                          mean = mean(contb_receipt_amt), 
+                          n = n()
+                          )
+ggplot(aes(x = party, y = total), data = contrPrePrimary) +
+  geom_boxplot() +
+  labs(title = "Amount Raised By Party Candidates, Pre-Primary", x = "Party", y = "Total Raised")
+```
+
+The democratic 'outlier' is Clinton, who had a big fundraising edge on the rest of the field. For the GOP,  Lindsey Graham, who had favorite son status as a SC Senator, was the outlier on the right. He raised over $1.8m only to withdraw from the primary. Presumably, Graham was able to rely on big donors within the state, judging from mean contributions (arranged in descending order): 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+arrange(contrPrePrimary, desc(mean))
+```
+
+Totals raised by the GOP candidates, the winner (Trump) is shown in black:  
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#plot pre-primary total contribution amounts for the Republicans
+ggplot(aes(x = cand_nm,y = total), 
+  data = subset(contrPrePrimary, (party == "Republican"))) +
+  geom_histogram(stat = "identity", fill = "red") +
+  geom_histogram(stat = "identity", data=subset(contrPrePrimary, 
+                 (party == "Republican" & cand_nm == "Trump, Donald J.")), 
+                 fill="black") +
+  labs(title = "Pre-Primary Contributions Per GOP Candidate", x = "Candidate", y = "Amount Raised") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+
+Now we check for correlation between amount raised in this period, and primary showing as a percentage:
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#introduce the primary percentages for the republican candidates, 
+#calculate the correlation to amount raised, scatterplot
+gop_poll_nums <- c(7.84, 7.23, 0, 22.33, 0, 0, 0, 0, 7.61, 0, 0, 22.48, 0, 32.51, 0)
+g <- subset(contrPrePrimary$total, contrPrePrimary$party == "Republican")
+gop_polls_amount <- data.frame(g, gop_poll_nums)
+ggplot(aes(x = g, y = gop_poll_nums), data = gop_polls_amount) +
+  geom_point() +
+  labs(title = "Primary Percentage vs. Amount Raised, Republicans", x = "Amount Raised", y = "Primary %")
+cor(g, gop_poll_nums)
+```
+
+This paints an  unexpected picture of the relationship between money and results: in the '16 SC primary, they didn't matter much on the Republican side. It's probable that Trump's high celebrity visibility nullified the fundraising deficit. 
+
+Though looking at the entire set of contributions: 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#plot the total contribution amounts for all republican candidates. 
+ggplot(aes(x = cand_nm,y = total), 
+  data = subset(contrByParty, (party == "Republican"))) +
+  geom_histogram(stat = "identity", fill = "red") +
+  geom_histogram(stat = "identity", data=subset(contrByParty, 
+                 (party == "Republican" & cand_nm == "Trump, Donald J.")), 
+                 fill="black") +
+  labs(title = "All Contributions Per GOP Candidate", x = "Candidate", y = "Amount Raised") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+
+Trump was successful raising money after the primary. Later we'll look at the head-to-head with Clinton after each had secured their nominations. 
+
+On the democratic side, only Sanders and Clinton  received more than 1% of the vote. O'Malley had 713 among the other candidates who garnered any contributions (Lessig and Webb had withdrawn).
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#plot the pre-primary amounts for Democrats 
+ggplot(aes(x = cand_nm,y = total), 
+  data = subset(contrPrePrimary, (party == "Democrat"))) +
+  geom_histogram(stat = "identity", fill = "blue") +
+  labs(title = "Pre-Primary Contributions Per Democratic Candidate", 
+       x = "Candidate", y = "Amount Raised") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+
+This directly correlated to the primary results: 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#introduce the primary percentages for the Democratic candidates, 
+#calculate the correlation to amount raised, scatterplot
+dem_poll_nums <- c(73.44, 0, 0.2, 26, 0)
+d <- subset(contrPrePrimary$total, contrPrePrimary$party == "Democrat")
+dem_polls_amount <- data.frame(d, dem_poll_nums)
+cor(d, dem_poll_nums)
+ggplot(aes(x = d, y = dem_poll_nums), data = dem_polls_amount) +
+  geom_point() +
+  labs(title = "Primary Percentage vs. Amount Raised, Democrats",
+       x = "Amount Raised", y = "Primary %")
+```
+
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#relevel the party factor, had to do this to make 
+#colors work on subsequent graphs
+p <- c("red", "blue")
+contr_data$party <- relevel(contr_data$party, "Republican")
+county_group <- group_by(subset(contr_data, party == "Republican" | party == "Democrat"), 
+                         county, party)
+county_data <- summarise(county_group, 
+                         total = sum(contb_receipt_amt), 
+                         n = n()
+                         )
+```
+
+
+Next I augmented the county data with demographic information: population, median and per capita income, looking for correlations.  
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#reshape the county data file, rows to columns
+library(reshape2)
+county_data <- melt(county_data)
+county_data <- dcast(county_data, county ~ party + variable)
+#add extermal data with function addCountyData
+county_data <- addCountyData(COUNTY_DATA_FILE, county_data)
+#clean up
+county_data$Democrat_total[is.na(county_data$Democrat_total)] <- 1
+county_data$Democrat_n[is.na(county_data$Democrat_n)] <- 1
+county_data <- na.omit(county_data)
+#add conditional means, totals: 
+county_data$gop_contr_mean <- county_data$Republican_total/county_data$Republican_n
+county_data$dem_contr_mean <- county_data$Democrat_total/county_data$Democrat_n
+county_data$total <- county_data$Republican_total + county_data$Republican_total
+county_data$n <- county_data$Republican_n + county_data$Democrat_n
+```
+
+Population: 
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#find correlation between (county) population and amount raised, 
+#print and scatterplot
+cor(county_data$population, county_data$Democrat_total + county_data$Republican_total)
+ggplot(aes(x = population, y = Democrat_total + Republican_total), data = county_data) +
+  geom_point() +
+  labs(title = "Amount Raised vs County Population", x  = "Population", y = "Amount Raised")
+```
+
+Population was the strongest predictor of the 3. 
+
+Median Income: 
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#find correlation between (county) median income and amount raised, 
+#print and scatterplot
+cor(county_data$median, county_data$Democrat_total + county_data$Republican_total)
+ggplot(aes(x = median, y = Democrat_total + Republican_total), data = county_data) +
+  geom_point() +
+  labs(title = "Amount Raised vs County Median Income", x  = "Median Income", y = "Amount Raised")
+```
+
+Per capita income was a stronger predictor than median:
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#find correlation between (county) per capita income and amount raised, 
+#print and scatterplot
+cor(county_data$per_capita, county_data$Democrat_total + county_data$Republican_total)
+ggplot(aes(x = per_capita, y = Democrat_total + Republican_total), data = county_data) +
+  geom_point() +
+  labs(title = "Amount Raised vs County Per Capita Income", x  = "Per Capita Income", 
+       y = "Amount Raised")
+```
+
+
+# Bivariate Analysis
+
+Comparing total contribution amounts to parties, the Republicans had a significant advantage overall. This was the case across the highest-contributing counties in both total and average contribution. 
+
+Weighing the relationship between total contributions amount, and primary results, the large sums raised by native son Lindsey Graham and the other GOP contenders did not correlate with success. The winner, Donald Trump, was far behind in total raised (though he made up for it later), but still won the primary. The correlation between amount raised and primary results on the Democratic side was very strong.   
+
+Considering geography, total contribution amount correlated strongly (r = .87) with population. Per capita income (r = .69) was a stronger predictor of total contribution amount than median income (r= .52). 
+
+#Multivariate Plots 
+
+Next, I looked for trends by contribution totals, county, and party.
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#plot relationship between total contribution amount, county, party
+ tot_by_county <- ggplot(data = subset(contr_data, party == "Democrat" | party == "Republican"),
+       aes(x = factor(county),  y = contb_receipt_amt, fill = party)) + 
+  geom_bar(stat="identity", position = "stack") + 
+  scale_fill_manual(values = p)  +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  labs(title = "Total Raised (Party) By County", x = "county", y = "Total Raised")
+tot_by_county
+```
+
+As can be seen, the Republicans had the edge in all of the highest contributing counties. The mean contribution per county also favored the GOP: 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#plot relationship between mean contribution amount, county, party
+ggplot(data = subset(contr_data, party == "Democrat" | party == "Republican"),
+       aes(x = factor(county),  y = mean(contb_receipt_amt), fill = party)) + 
+  geom_bar(stat="identity", position = "stack") + 
+  scale_fill_manual(values = p)  +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  labs(title = "Mean Contribution (Party) By County", x = "County", y = "Mean Contribution")
+
+```
+
+This needs a more strict geographical approach. I used the choroplethr packages to construct density maps: 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#Give population, contribution density
+#and ratio maps for the state
+
+#install.packages(choroplehtr)
+#install.packages(choroplehtrMaps)
+library(choroplethr)
+library(choroplethrMaps)
+library(gridExtra)
+
+#This function takes a dataframe of map data,
+#a title, and legend key, and uses the 
+#choropleth packages (see install options above)
+#to give a density map
+county_map <- function(df, t, l) {
+  map <- county_choropleth(df,
+                           title = t,
+                           legend = l,
+                           state_zoom = "south carolina"
+  )
+  return(map)
+}
+
+data("county.regions")
+sc_codes <- subset(county.regions, state.name == "south carolina")
+dem_map_df <- data.frame(region = sc_codes$region, value = county_data$Democrat_total)  
+gop_map_df <- data.frame(region = sc_codes$region, value = county_data$Republican_total)
+ratio_map_df <- data.frame(region = sc_codes$region, 
+                         value = county_data$Republican_total/county_data$Democrat_total)
+
+data(df_pop_county)
+m1 <- county_map(df_pop_county, "Population SC Counties", "pop." )
+m2 <- county_map(dem_map_df, "Total By County, Democrats", " ")
+m3 <- county_map(gop_map_df, "Total By County, Republicans", " ")
+m4 <- county_map(ratio_map_df, "Ratio GOP/Dem", "$")
+grid.arrange(m1, m2, m3, m4, ncol = 2)
+```
+
+The separate democratic and Republican maps resemble the population map, this will be explored more precisely below. The last map, ratio of Republican/Democratic contributions per county  is the most indicative of qualitative factors: the white regions are where the Democrats either won or were close, and are clustered near the middle of the state or on the coast. The upstate has always trended Republican, the ratios are stronger in the Northwest section. 
+
+Total raised by county population, with 3rd variable party. The first correlation coefficient is for the Democrats, second for Republicans: 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#correlaton between county populations and parties:
+cor(county_data$population, county_data$Democrat_total)
+cor(county_data$population, county_data$Republican_total)
+#re-factor county_data data frame for combined scatter_plot
+c_df <- data.frame(pop = county_data$population, gop = county_data$Republican_total, 
+                   democrat = county_data$Democrat_total)
+c_df.m <- melt(c_df, id.vars = "pop", measure.vars = c("gop", "democrat"))
+#combined scatter_plot
+ggplot(c_df.m, aes(x = pop, y = value, colour = variable)) + 
+  geom_point() +
+  labs(title = "Total Raised (Party) vs County Population", 
+       x = "County Population", y  = "Total $ Raised" ) +
+  stat_smooth(method = 'lm')
+```
+
+Population is a good predictor for both, but stronger for the GOP. 
+
+***
+
+Attempting to probe the relationship between per capita income and cumulative county contributions, figuring in the extra variable of party: 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#correlation between per_capita income per county, total raised, 
+#by party
+cor(county_data$per_capita, county_data$Democrat_total)
+cor(county_data$per_capita, county_data$Republican_total)
+#re-factor for combined scatterplot
+percap_df <- data.frame(cap = county_data$per_capita, gop = county_data$Republican_total, 
+                   democrat = county_data$Democrat_total)
+percap_df.m <- melt(percap_df, id.vars = "cap", measure.vars = c("gop", "democrat"))
+
+ggplot(percap_df.m, aes(x = cap, y = value, colour = variable)) + 
+  geom_point() +
+  labs(title = "Total Raised (Party) vs Per Capita Income", 
+       x = "Per Capita Income", y  = "Total $ Raised" ) +
+  stat_smooth(method = 'lm')
+```
+
+Per capita seems marginally better as a predictor, for the GOP. But one problem with the data as gathered is that income statistics aren't available *per party*, which makes it hard to ferret out stronger relationships between wealth and average/aggregate contributions. 
+
+***
+
+To gain meaningful insight related to election results and contribution amounts, the values of the variable candidate names (cand_nm) for Trump and Clinton must be looked at more closely, and the date variable as well. 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#create a data frame for comparing clinton and trump
+clinton_trump_group <- group_by(subset(contr_data, 
+                                      cand_nm == "Trump, Donald J." | 
+                                      cand_nm == "Clinton, Hillary Rodham"),
+                                      yearmo = as.Date(as.yearmon(date)),
+                                      cand_nm
+                               )
+#summarise on total contributions amounts
+clinton_vs_trump <- summarise(clinton_trump_group,
+                              total = sum(contb_receipt_amt),
+                              n = n()
+                              )
+#Plot timeline of contributions amounts 
+#for the two candidates
+c_v_t <- ggplot(data = clinton_vs_trump, aes(x = yearmo, y = total)) + 
+     geom_freqpoly(aes(color = cand_nm), stat="identity" ) + 
+     scale_fill_brewer(palette = "Set2")  +
+     theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+     scale_x_date(date_breaks = "1 month", date_labels = "%b %y") +
+     labs(title = "Clinton vs Trump, by Month", x = "Month", y = "Amount Raised ($)")
+c_v_t
+```
+
+This is expanded upon below. 
+
+***
+
+Finally, a look at industry contributions: 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#Group by industry, summarise on total
+industry_group = group_by(subset(contr_data, !is.na(contr_data$Industry) &
+                                   (party == "Democrat" | party == "Republican" )), 
+                          Industry, party)
+industry_data = summarise(industry_group, 
+                          total = sum(contb_receipt_amt), 
+                          n = n()
+                          )
+#Plot by industry per party
+ggplot(data = subset(industry_data, (Industry != "Retired" & Industry != "Unknown")), 
+     aes(x = factor(Industry), y = total, fill = party)) + 
+     geom_bar(stat="identity", position = "stack") + 
+     scale_fill_manual(values = p) +
+     scale_y_sqrt() +
+     theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+     labs(title = "Contributions by Industry", x = "Industry", y = "Contributions($)")
+```
+
+Comparing party contribution amounts with industry, the democrats raised more from the fields of law, education, students, and creative industries. The GOP had a slight edge in the medical fields, a strong one from the management-executive class. 
+
+## Multivariate Analysis 
+
+I was principally interested here in buidling a geographical profile of contribution amounts per party and county. The GOP raised more money in most counties in the state, and had higher mean contributions as well. In particular, they dominated the upstate region. The correlations found earlier between the collective contributions and population held up considering party as well (stronger for the GOP, though). 
+
+Narrowing the candidate variables to the two principals in the general election, time was of the essence. Clinton had solid fund-raising the whole way (earlier we saw whe was the top recipient). But the timeline shows the night-and-day financial support for Trump before-and-after he had secured the nomination. This is perhaps the most surprising graph of the whole analysis, belying the underdog-to-frontrunner status.  
+
+There was also a comparison along party and industry lines, which did indicate some trends in support of the separate parties. 
+
+# Final Plots and Summary 
+
+## Plot 1
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#cut income into ranges
+ranges <- cut(x = contr_data$contb_receipt_amt, 
+                             breaks = c(0, 100, 200, 300, 1000, 2700, 10000), dig.lab=10)  
+#create data frame with contribution amounts 
+#by data range
+dat <- transform(contr_data$contb_receipt_amt, ranges)
+contr_total_ranges <- ddply(dat, "ranges", summarize, totVal = sum(X_data))
+#plot income range histogram 
+c2<- ggplot(aes(x = ranges, y = totVal), data = contr_total_ranges) + 
+  geom_histogram(stat = "identity") +
+  labs(title = "Totals by Contribution Ranges", x = "Contributions Amount", y = "Total Amount ($)")+
+  scale_x_discrete(labels = c("$0-100", "$101-200", "$201-300", "$301-1000", "$1000-2700", "$2700-10000")) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))  
+
+grid.arrange(contr_hist_1, c2, ncol = 1)
+
+```
+
+While the contribution receipt amounts are right-tailed, a closer look at the summary statistics showed a median of 38, mean of 142 and a 3rd quartile at 100. As the 2nd graph indicates a larger proportion of the cumulative contribution amounts were from big donors, dragging the mean contribution higher. 
+
+## Plot 2
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#plot histogram and heat map of total by county
+grid.arrange(tot_by_county, m4, ncol = 1)
+```
+
+The GOP raised more money across the state, and in most counties. Geographically, the democrats were closer in Richland County and the Charleston area, but the Republicans were dominant in the populous upstate counties like Greenville and Spartanburg. 
+
+## Plot 3
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#re-plot clinton vs trump timeline 
+c_v_t
+```
+
+The date variable was crucial as well, and reflects the storylines of the Clinton and Trump campaigns in the state. Clinton led in fundraising through the primary on Feb. 20th, until around the time that Trump clinched the nomination in May, after which he led until the election. The low level of support for Trump was a non-factor in the primary. 
+
+#Reflection 
+
+The original dataset contained 64,920 positive contributions, after discarding negative ones. There were 22 original variables, not all of which were useful, and some re-shaping was required, in addition to augmenting with several variables. After preliminary analysis, I focused on studying the aggregate contributions by county, by party and candidate, and dates. This latter was important because of the nature of the campaign itself, broken into primary and general election phases. 
+
+While small donations made up the vast majority of contributions, in fact larger contributions outweighed them in the cumulative sum. At the county level, the relationship between aggregated contribution amounts at the county level and population was strongest, with some reasonable correlation between amount and per capita income as well. The relationship between amount raised and primary results was meaningless on the GOP side, very strong for the Democrats. Trump won the primary with very little financial support, but overtook Clinton in fundraising in the general election phase. 
+
+There are limitations in the dataset, and the resulting analysis. To detect meaningful correlations, extra demographic data was introduced at the county level. Even after detecting a relationship between per capita income and contribution amounts, it was not possible to move forward to more focused analysis (for example per party or even zip code), that would likely be necessary for an analyst hoping to use the data for (say) political ad buys. In addition, the geographical and candidate profiles built are *for this election*, and would not likely be valid for previous/future ones. This is owing to the huge GOP field (usually there is more solidification around 1 or a few candidates), and to the special nature of the outsider campaign run by Trump, which may have pulled in independents around the state. If a political consultant was looking to build better voter and geographical profiles, he/she would likely need to look at a longer timeline of elections, in addition to seeking out more specialized income/other data. 
